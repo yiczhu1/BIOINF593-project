@@ -18,7 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch_geometric.data import Data
-from torch_geometric.nn import GraphConv
+from torch_geometric.nn import GraphConv, GATConv
 
 # -----------------------------
 # 0. Environment (optional)
@@ -38,7 +38,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # -----------------------------
 
 class DRASIEncoder(nn.Module):
-    def __init__(self, in_dim, hidden_mlp=128, hidden_gnn=128, latent_dim=32):
+    # add heads parameter, default 4
+    def __init__(self, in_dim, hidden_mlp=128, hidden_gnn=128, latent_dim=32, heads=4):
         super().__init__()
         # MLP on PCA features
         self.mlp = nn.Sequential(
@@ -47,9 +48,13 @@ class DRASIEncoder(nn.Module):
             nn.Linear(hidden_mlp, hidden_gnn),
             nn.ReLU(),
         )
-        # GNN layers over spatial graph
-        self.gnn1 = GraphConv(hidden_gnn, hidden_gnn)
-        self.gnn2 = GraphConv(hidden_gnn, hidden_gnn)
+        # GNN layers over spatial graph replaced with GATConv
+
+        # Layer 1: Multi-head attention. output size will be hidden_gnn * heads
+        self.gnn1 = GATConv(hidden_gnn, hidden_gnn, heads=heads)
+        
+        # Layer 2: Single-head attention to collapse features back to hidden_gnn
+        self.gnn2 = GATConv(hidden_gnn * heads, hidden_gnn, heads=1)
 
         # Heads for VAE parameters
         self.mu_head = nn.Linear(hidden_gnn, latent_dim)
@@ -57,6 +62,7 @@ class DRASIEncoder(nn.Module):
 
     def forward(self, x, edge_index, edge_attr):
         h = self.mlp(x)
+        # GATConv usage is the same as GraphConv (edge_attr as weights)
         h = F.relu(self.gnn1(h, edge_index, edge_attr))
         h = F.relu(self.gnn2(h, edge_index, edge_attr))
         mu = self.mu_head(h)
@@ -311,12 +317,12 @@ def run_drasi(
     domain_col="ground_truth",  # true labels in iSTBench DLPFC
     run_normalization=True,
     hvgs=2000,
-    n_pcs=35,
-    k_spatial=8,
-    latent_dim=32,
-    n_epochs=100,
-    lambda_kl=1e-3,
-    lambda_ddg=0.1,
+    n_pcs=50,
+    k_spatial=10,
+    latent_dim=48,
+    n_epochs=200,
+    lambda_kl=0.01,
+    lambda_ddg=70,
     seed=0,
 ):
     """
